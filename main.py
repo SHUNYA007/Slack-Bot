@@ -11,13 +11,13 @@ import json
 
 app = FastAPI(title="Gemini Question Answering API")
 
-
+# Environment variables
 slack_token = os.environ.get("SLACK_BOT_TOKEN")
 slack_signing_secret = os.environ.get("SLACK_SIGNING_SECRET")  # For event verification
 generative_ai.configure(api_key=os.environ.get("CHAT_BOT_TOKEN"))
 channel = os.environ.get("CHANNEL")
 
-
+# Initialize Slack app and handler
 slack_app = App(token=slack_token, signing_secret=slack_signing_secret)
 handler = SlackRequestHandler(app=slack_app)
 
@@ -29,7 +29,7 @@ async def health_check():
 @app.post("/slack/events")
 async def slack_events(req: Request):
     """Handles Slack events, including message events."""
-    return await handler.handle(req)
+    return await handler.handle(req)  # Important: Await the handler here
 
 
 @slack_app.event("message")
