@@ -34,30 +34,29 @@ async def slack_events(req: Request):
 
 @slack_app.event("message")
 async def handle_message_events(client: WebClient, event: dict):
-    """Handles Slack message events.  Checks for bot mentions or direct messages."""
+   
     try:
-        if event.get("subtype") is None or event.get("subtype") != "bot_message": 
+        if event.get("subtype") is None or event.get("subtype") != "bot_message":
             text = event.get("text")
             channel_id = event.get("channel")
-            thread_ts = event.get("thread_ts") or event.get("ts") 
+            thread_ts = event.get("thread_ts") or event.get("ts")
 
-        
             if f"<@{slack_app.api_client.auth_test()['user_id']}>" in text or event.get("channel_type") == "im":
-                question = text.replace(f"<@{slack_app.api_client.auth_test()['user_id']}>", "").strip() 
+                question = text.replace(f"<@{slack_app.api_client.auth_test()['user_id']}>", "").strip()
 
                 if question:
-                    answer = await get_gemini_answer(question)  
+                    answer = await get_gemini_answer(question)  # Await the Gemini call!
                     if answer:
                         try:
-                            client.chat_postMessage(
+                            await client.chat_postMessage(  # Await the Slack API call!
                                 channel=channel_id,
                                 text=answer,
-                                thread_ts=thread_ts 
+                                thread_ts=thread_ts
                             )
                         except SlackApiError as e:
                             print(f"Error sending message to Slack: {e}")
                     else:
-                        client.chat_postMessage(
+                        await client.chat_postMessage( # Await the Slack API call!
                                 channel=channel_id,
                                 text="I couldn't generate a response.",
                                 thread_ts=thread_ts
@@ -65,7 +64,7 @@ async def handle_message_events(client: WebClient, event: dict):
 
     except Exception as e:
         print(f"Error handling Slack event: {e}")
-        client.chat_postMessage(
+        await client.chat_postMessage( # Await the Slack API call!
                                 channel=channel_id,
                                 text="An error occurred.",
                                 thread_ts=thread_ts
