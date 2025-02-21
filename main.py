@@ -1,33 +1,82 @@
-from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi import FastAPI, Request, HTTPException, Query, Depends
 import os
 import uvicorn
 import google.generativeai as generative_ai
 from typing import Optional
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-
-
-
+from slack_bolt.adapter.fastapi import SlackRequestHandler
+from slack_bolt import App
+import json
 
 app = FastAPI(title="Gemini Question Answering API")
-slack_token =  os.environ.get("SLACK_BOT_TOKEN")
-generative_ai.configure(api_key=os.environ.get("CHAT_BOT_TOKEN")) 
+
+# Environment variables
+slack_token = os.environ.get("SLACK_BOT_TOKEN")
+slack_signing_secret = os.environ.get("SLACK_SIGNING_SECRET")  # For event verification
+generative_ai.configure(api_key=os.environ.get("CHAT_BOT_TOKEN"))
 channel = os.environ.get("CHANNEL")
 
+# Initialize Slack app and handler
+slack_app = App(token=slack_token, signing_secret=slack_signing_secret)
+handler = SlackRequestHandler(app=slack_app)
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+@app.post("/slack/events")
+async def slack_events(req: Request):
+    """Handles Slack events, including message events."""
+    return await handler.handle(req)
 
 
-@app.get("/answer")
-async def get_answer(question: str = Query(..., description="The question to ask Gemini"),
-                     model: Optional[str] = Query(None, description="The Gemini model to use (e.g., 'gemini-pro'). If None, the default model will be used."),
-                     temperature: Optional[float] = Query(0.0, description="The temperature for response generation."),
-                     max_output_tokens: Optional[int] = Query(512, description="Maximum number of tokens in the generated response."),
-                     top_p: Optional[float] = Query(None, description="Nucleus sampling parameter."),
-                     top_k: Optional[int] = Query(None, description="Top-k sampling parameter.")):
-    """Answers a question using the Gemini API."""
+@slack_app.event("message")
+async def handle_message_events(client: WebClient, event: dict):
+    """Handles Slack message events.  Checks for bot mentions or direct messages."""
+    try:
+        if event.get("subtype") is None or event.get("subtype") != "bot_message": 
+            text = event.get("text")
+            channel_id = event.get("channel")
+            thread_ts = event.get("thread_ts") or event.get("ts") 
 
+        
+            if f"<@{slack_app.api_client.auth_test()['user_id']}>" in text or event.get("channel_type") == "im":
+                question = text.replace(f"<@{slack_app.api_client.auth_test()['user_id']}>", "").strip() 
+
+                if question:
+                    answer = await get_gemini_answer(question)  
+                    if answer:
+                        try:
+                            client.chat_postMessage(
+                                channel=channel_id,
+                                text=answer,
+                                thread_ts=thread_ts 
+                            )
+                        except SlackApiError as e:
+                            print(f"Error sending message to Slack: {e}")
+                    else:
+                        client.chat_postMessage(
+                                channel=channel_id,
+                                text="I couldn't generate a response.",
+                                thread_ts=thread_ts
+                            )
+
+    except Exception as e:
+        print(f"Error handling Slack event: {e}")
+        client.chat_postMessage(
+                                channel=channel_id,
+                                text="An error occurred.",
+                                thread_ts=thread_ts
+                            )
+
+
+async def get_gemini_answer(question: str, model: Optional[str] = None, temperature: Optional[float] = 0.0, max_output_tokens: Optional[int] = 512, top_p: Optional[float] = None, top_k: Optional[int] = None):
+    """Gets an answer from Gemini."""
     try:
         if model is None:
-            model = "gemini-2.0-flash-001" 
+            model = "gemini-2.0-flash-001"
         gemini_model = generative_ai.GenerativeModel(model)
         generation_config = {
             "temperature": temperature,
@@ -38,28 +87,19 @@ async def get_answer(question: str = Query(..., description="The question to ask
         if top_k is not None:
             generation_config["top_k"] = top_k
 
-        response = gemini_model.generate_content(
-            contents=[question]
-            
-        )
-        print(response)
+        response = gemini_model.generate_content(contents=[question], generation_config=generation_config)
+
         if response.candidates:
-            
             answer = response.candidates[0].content.parts[0].text
-            client = WebClient(token=slack_token)
-            response = client.chat_postMessage(
-                channel=channel,
-                text=answer
-                )
-            return {"answer": answer}
-           
+            return answer
         else:
-            raise HTTPException(status_code=500, detail="No answer generated by Gemini.")
+            return None
 
     except Exception as e:
-        print(f"Error: {e}")
-        raise HTTPException(status_code=500, detail=f"An error occurred: {e}")
+        print(f"Error getting Gemini answer: {e}")
+        return None
+
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, port=80, host='0.0.0.0')
+    uvicorn.run(app, port=int(os.environ.get("PORT", 80)), host='0.0.0.0')

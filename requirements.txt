@@ -1,5 +1,6 @@
 fastapi
 uvicorn
 google-generativeai
-slack_sdk
+slack-sdk
+slack-bolt
 typing
