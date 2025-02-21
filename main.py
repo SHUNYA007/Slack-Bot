@@ -29,12 +29,47 @@ async def health_check():
 @app.post("/slack/events")
 async def slack_events(req: Request):
     """Handles Slack events, including message events."""
-    return await handler.handle(req)  # Important: Await the handler here
+    return await handler.handle(req)
+
+@app.post("/send_slack_message")
+async def send_slack_message(channel_id: str = Query(..., title="Channel ID"), message_text: str = Query(..., title="Message Text")):
+    """Sends a message to a specified Slack channel."""
+    try:
+        await slack_app.client.chat_postMessage(
+            channel=channel_id,
+            text=message_text
+        )
+        return {"status": "message_sent", "channel": channel_id}
+    except SlackApiError as e:
+        raise HTTPException(status_code=500, detail=f"Error sending message to Slack: {e}")
+
+@app.post("/gemini_to_slack")
+async def gemini_to_slack(channel_id: str = Query(..., title="Channel ID"), question: str = Query(..., title="Question for Gemini")):
+    """Questions Gemini and sends the answer to a specified Slack channel."""
+    try:
+        gemini_answer = await get_gemini_answer(question)
+        if gemini_answer:
+            try:
+                await slack_app.client.chat_postMessage(
+                    channel=channel_id,
+                    text=gemini_answer
+                )
+                return {"status": "gemini_answer_sent", "channel": channel_id, "question": question}
+            except SlackApiError as e:
+                raise HTTPException(status_code=500, detail=f"Error sending message to Slack: {e}")
+        else:
+            return {"status": "gemini_no_answer", "channel": channel_id, "question": question, "detail": "Gemini could not generate an answer."}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error during Gemini interaction: {e}")
+
+
 
 
 @slack_app.event("message")
-async def handle_message_events(client: WebClient, event: dict, logger):
+async def handle_message_events(ack, client: WebClient, event: dict, logger): # Added ack
     """Handles regular message events (non-mentions)."""
+    await ack() # Acknowledge event receipt
     if event.get("subtype") is None or event.get("subtype") != "bot_message":
         text = event.get("text")
         channel_id = event.get("channel")
@@ -62,8 +97,9 @@ async def handle_message_events(client: WebClient, event: dict, logger):
 
 
 @slack_app.event("app_mention")
-async def handle_app_mention_events(client: WebClient, event: dict, logger):
+async def handle_app_mention_events(ack, client: WebClient, event: dict, logger): # Added ack
     """Handles app_mention events (when the bot is mentioned)."""
+    await ack() # Acknowledge event receipt
     logger.info(f"App mention event received: {event}") # Log the event for debugging
     try:
         text = event.get("text")
