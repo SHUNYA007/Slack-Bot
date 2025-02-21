@@ -11,13 +11,13 @@ import json
 
 app = FastAPI(title="Gemini Question Answering API")
 
-# Environment variables
+
 slack_token = os.environ.get("SLACK_BOT_TOKEN")
 slack_signing_secret = os.environ.get("SLACK_SIGNING_SECRET")  # For event verification
 generative_ai.configure(api_key=os.environ.get("CHAT_BOT_TOKEN"))
 channel = os.environ.get("CHANNEL")
 
-# Initialize Slack app and handler
+
 slack_app = App(token=slack_token, signing_secret=slack_signing_secret)
 handler = SlackRequestHandler(app=slack_app)
 
@@ -33,42 +33,70 @@ async def slack_events(req: Request):
 
 
 @slack_app.event("message")
-async def handle_message_events(client: WebClient, event: dict):
-   
+async def handle_message_events(client: WebClient, event: dict, logger):
+    """Handles regular message events (non-mentions)."""
+    if event.get("subtype") is None or event.get("subtype") != "bot_message":
+        text = event.get("text")
+        channel_id = event.get("channel")
+        thread_ts = event.get("thread_ts") or event.get("ts")
+
+        if event.get("channel_type") == "im": # Still handle direct messages in message event
+            question = text.strip()  # No need to remove bot mention in DM
+            if question:
+                answer = await get_gemini_answer(question)
+                if answer:
+                    try:
+                        await client.chat_postMessage(
+                            channel=channel_id,
+                            text=answer,
+                            thread_ts=thread_ts
+                        )
+                    except SlackApiError as e:
+                        print(f"Error sending message to Slack: {e}")
+                else:
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        text="I couldn't generate a response.",
+                        thread_ts=thread_ts
+                    )
+
+
+@slack_app.event("app_mention")
+async def handle_app_mention_events(client: WebClient, event: dict, logger):
+    """Handles app_mention events (when the bot is mentioned)."""
+    logger.info(f"App mention event received: {event}") # Log the event for debugging
     try:
-        if event.get("subtype") is None or event.get("subtype") != "bot_message":
-            text = event.get("text")
-            channel_id = event.get("channel")
-            thread_ts = event.get("thread_ts") or event.get("ts")
+        text = event.get("text")
+        channel_id = event.get("channel")
+        thread_ts = event.get("thread_ts") or event.get("ts")
 
-            if f"<@{slack_app.api_client.auth_test()['user_id']}>" in text or event.get("channel_type") == "im":
-                question = text.replace(f"<@{slack_app.api_client.auth_test()['user_id']}>", "").strip()
+        question = text.replace(f"<@{slack_app.api_client.auth_test()['user_id']}>", "").strip()
 
-                if question:
-                    answer = await get_gemini_answer(question)  # Await the Gemini call!
-                    if answer:
-                        try:
-                            await client.chat_postMessage(  # Await the Slack API call!
-                                channel=channel_id,
-                                text=answer,
-                                thread_ts=thread_ts
-                            )
-                        except SlackApiError as e:
-                            print(f"Error sending message to Slack: {e}")
-                    else:
-                        await client.chat_postMessage( # Await the Slack API call!
-                                channel=channel_id,
-                                text="I couldn't generate a response.",
-                                thread_ts=thread_ts
-                            )
+        if question:
+            answer = await get_gemini_answer(question)
+            if answer:
+                try:
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        text=answer,
+                        thread_ts=thread_ts
+                    )
+                except SlackApiError as e:
+                    print(f"Error sending message to Slack: {e}")
+            else:
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    text="I couldn't generate a response.",
+                    thread_ts=thread_ts
+                )
 
     except Exception as e:
-        print(f"Error handling Slack event: {e}")
-        await client.chat_postMessage( # Await the Slack API call!
-                                channel=channel_id,
-                                text="An error occurred.",
-                                thread_ts=thread_ts
-                            )
+        print(f"Error handling app_mention event: {e}")
+        await client.chat_postMessage(
+            channel=channel_id,
+            text="An error occurred.",
+            thread_ts=thread_ts
+        )
 
 
 async def get_gemini_answer(question: str, model: Optional[str] = None, temperature: Optional[float] = 0.0, max_output_tokens: Optional[int] = 512, top_p: Optional[float] = None, top_k: Optional[int] = None):
@@ -97,7 +125,6 @@ async def get_gemini_answer(question: str, model: Optional[str] = None, temperat
     except Exception as e:
         print(f"Error getting Gemini answer: {e}")
         return None
-
 
 
 if __name__ == '__main__':
