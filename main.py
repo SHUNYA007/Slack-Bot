@@ -26,10 +26,7 @@ async def health_check():
     """Health check endpoint."""
     return {"status": "ok"}
 
-@app.get("/dhariya-Ganndu")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "SAhi kaha"}
+
 
 
 @app.post("/slack/events")
